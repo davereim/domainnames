@@ -1,35 +1,10 @@
-import { db, ensureDB } from '@/lib/db';
-import { names } from '@/lib/schema';
-import { eq, avg, desc, count } from 'drizzle-orm';
+'use client';
+
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import StatusBadge from '@/components/StatusBadge';
-
-async function getStats() {
-  await ensureDB();
-  const [
-    [{ total }],
-    [{ shortlisted }],
-    [{ liked }],
-    [{ rejected }],
-    [{ avgScore }],
-    recent,
-  ] = await Promise.all([
-    db.select({ total: count() }).from(names),
-    db.select({ shortlisted: count() }).from(names).where(eq(names.status, 'Shortlist')),
-    db.select({ liked: count() }).from(names).where(eq(names.status, 'Like')),
-    db.select({ rejected: count() }).from(names).where(eq(names.status, 'Reject')),
-    db.select({ avgScore: avg(names.score) }).from(names),
-    db.select().from(names).orderBy(desc(names.createdAt)).limit(8),
-  ]);
-  return {
-    total,
-    shortlisted,
-    liked,
-    rejected,
-    averageScore: avgScore ? Math.round(parseFloat(String(avgScore)) * 10) / 10 : 0,
-    recent,
-  };
-}
+import { initStore, getStats } from '@/lib/store';
+import type { Name } from '@/types';
 
 function ScoreBar({ score }: { score: number }) {
   const pct = (score / 10) * 100;
@@ -44,8 +19,16 @@ function ScoreBar({ score }: { score: number }) {
   );
 }
 
-export default async function DashboardPage() {
-  const stats = await getStats();
+export default function DashboardPage() {
+  const [stats, setStats] = useState<{
+    total: number; shortlisted: number; liked: number; rejected: number;
+    averageScore: number; recent: Name[];
+  }>({ total: 0, shortlisted: 0, liked: 0, rejected: 0, averageScore: 0, recent: [] });
+
+  useEffect(() => {
+    initStore();
+    setStats(getStats());
+  }, []);
 
   const statCards = [
     { label: 'Total Names', value: stats.total, color: 'text-slate-900', bg: 'bg-white', href: '/names' },

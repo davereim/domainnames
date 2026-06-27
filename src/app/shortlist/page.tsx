@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import StatusBadge from '@/components/StatusBadge';
 import type { Name } from '@/types';
+import { initStore, getNames, updateName } from '@/lib/store';
 
 const DOMAIN_STATUSES = ['Unknown', 'Available', 'Taken', 'Premium', 'Needs Check'];
 
@@ -14,24 +15,25 @@ interface EditingState {
 
 export default function ShortlistPage() {
   const [names, setNames] = useState<Name[]>([]);
-  const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<EditingState | null>(null);
-  const [exporting, setExporting] = useState(false);
 
-  async function fetchShortlist() {
-    setLoading(true);
-    try {
-      const res = await fetch('/api/names?status=Shortlist&sortBy=rank&sortDir=asc&pageSize=200');
-      const data = await res.json();
-      setNames(data.names || []);
-    } finally {
-      setLoading(false);
-    }
+  function reload() {
+    initStore();
+    const all = getNames();
+    const shortlisted = all
+      .filter((n) => n.status === 'Shortlist')
+      .sort((a, b) => {
+        if (a.rank !== null && b.rank !== null) return a.rank - b.rank;
+        if (a.rank !== null) return -1;
+        if (b.rank !== null) return 1;
+        return a.createdAt.localeCompare(b.createdAt);
+      });
+    setNames(shortlisted);
   }
 
-  useEffect(() => { fetchShortlist(); }, []);
+  useEffect(() => { reload(); }, []);
 
-  async function updateRank(id: number, direction: 'up' | 'down') {
+  function updateRank(id: number, direction: 'up' | 'down') {
     const idx = names.findIndex((n) => n.id === id);
     if (idx === -1) return;
     if (direction === 'up' && idx === 0) return;
@@ -41,38 +43,19 @@ export default function ShortlistPage() {
     const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
     [newNames[idx], newNames[swapIdx]] = [newNames[swapIdx], newNames[idx]];
 
-    // Update ranks
     const updated = newNames.map((n, i) => ({ ...n, rank: i + 1 }));
+    updated.forEach((n) => updateName(n.id, { rank: n.rank }));
     setNames(updated);
-
-    // Persist
-    await Promise.all(
-      updated.map((n) =>
-        fetch(`/api/names/${n.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rank: n.rank }),
-        })
-      )
-    );
   }
 
-  async function removeFromShortlist(id: number) {
-    await fetch(`/api/names/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'Like', rank: null }),
-    });
+  function removeFromShortlist(id: number) {
+    updateName(id, { status: 'Like', rank: null });
     setNames((prev) => prev.filter((n) => n.id !== id));
   }
 
-  async function saveEdit() {
+  function saveEdit() {
     if (!editing) return;
-    await fetch(`/api/names/${editing.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ notes: editing.notes, domainStatus: editing.domainStatus }),
-    });
+    updateName(editing.id, { notes: editing.notes, domainStatus: editing.domainStatus });
     setNames((prev) =>
       prev.map((n) =>
         n.id === editing.id
@@ -83,28 +66,21 @@ export default function ShortlistPage() {
     setEditing(null);
   }
 
-  async function exportCSV() {
-    setExporting(true);
-    try {
-      const res = await fetch('/api/export?status=Shortlist');
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `shortlist-${new Date().toISOString().slice(0, 10)}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } finally {
-      setExporting(false);
-    }
-  }
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-      </div>
+  function exportCSV() {
+    const headers = ['Rank', 'Name', 'Category', 'Score', 'Domain Status', 'Domain Idea', 'Meaning', 'Notes', 'Risk Notes'];
+    const rows = names.map((n, i) =>
+      [i + 1, n.name, n.category, n.score, n.domainStatus, n.domainIdea || '', n.meaning, n.notes || '', n.riskNotes || '']
+        .map((v) => `"${String(v).replace(/"/g, '""')}"`)
+        .join(',')
     );
+    const csv = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `shortlist-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -113,18 +89,18 @@ export default function ShortlistPage() {
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">Shortlist</h1>
           <p className="text-sm text-slate-500 mt-1">
-            {names.length} shortlisted name{names.length !== 1 ? 's' : ''} — drag or reorder with arrows
+            {names.length} shortlisted name{names.length !== 1 ? 's' : ''} — reorder with arrows
           </p>
         </div>
         <button
           onClick={exportCSV}
-          disabled={exporting || names.length === 0}
+          disabled={names.length === 0}
           className="flex items-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-sm font-medium px-4 py-2 rounded-lg transition-colors disabled:opacity-40"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
           </svg>
-          {exporting ? 'Exporting…' : 'Export CSV'}
+          Export CSV
         </button>
       </div>
 
@@ -141,10 +117,7 @@ export default function ShortlistPage() {
       ) : (
         <div className="space-y-3">
           {names.map((name, idx) => (
-            <div
-              key={name.id}
-              className="bg-white rounded-xl border border-slate-200 overflow-hidden"
-            >
+            <div key={name.id} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
               <div className="flex items-start gap-4 p-5">
                 {/* Rank + controls */}
                 <div className="flex flex-col items-center gap-1 min-w-[32px]">
@@ -245,7 +218,6 @@ export default function ShortlistPage() {
                   <button
                     onClick={() => setEditing({ id: name.id, notes: name.notes || '', domainStatus: name.domainStatus })}
                     className="text-xs text-slate-400 hover:text-slate-700 border border-slate-200 px-2 py-1.5 rounded-lg transition-colors whitespace-nowrap"
-                    title="Mark Domain Status"
                   >
                     Domain Status
                   </button>

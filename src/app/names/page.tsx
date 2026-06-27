@@ -1,13 +1,16 @@
 'use client';
 
-import { useState, useEffect, useCallback, Suspense } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import StatusBadge from '@/components/StatusBadge';
 import type { Name } from '@/types';
+import { initStore, getNames, updateName } from '@/lib/store';
 
 const STATUSES = ['New', 'Like', 'Maybe', 'Reject', 'Shortlist', 'Domain Taken', 'Trademark Concern'];
 const DOMAIN_STATUSES = ['Unknown', 'Available', 'Taken', 'Premium', 'Needs Check'];
 const CATEGORIES = ['Invented Word', 'Trust & Stewardship', 'Visibility & Clarity', 'Operations & Intelligence', 'Short Modern SaaS', 'Biblical-Root Inspired'];
+
+const PAGE_SIZE = 50;
 
 function ScoreBar({ score }: { score: number }) {
   const pct = (score / 10) * 100;
@@ -32,23 +35,10 @@ function EditRow({ name, onClose, onSave }: EditRowProps) {
   const [status, setStatus] = useState(name.status);
   const [domainStatus, setDomainStatus] = useState(name.domainStatus);
   const [notes, setNotes] = useState(name.notes || '');
-  const [saving, setSaving] = useState(false);
 
-  async function save() {
-    setSaving(true);
-    try {
-      const res = await fetch(`/api/names/${name.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status, domainStatus, notes }),
-      });
-      if (res.ok) {
-        const updated = await res.json();
-        onSave(updated);
-      }
-    } finally {
-      setSaving(false);
-    }
+  function save() {
+    const updated = updateName(name.id, { status, domainStatus, notes });
+    if (updated) onSave(updated);
   }
 
   return (
@@ -97,8 +87,8 @@ function EditRow({ name, onClose, onSave }: EditRowProps) {
             <button onClick={onClose} className="text-xs text-slate-500 hover:text-slate-700 px-3 py-1.5 border border-slate-200 rounded-lg">
               Cancel
             </button>
-            <button onClick={save} disabled={saving} className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg disabled:opacity-50">
-              {saving ? 'Saving…' : 'Save'}
+            <button onClick={save} className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg">
+              Save
             </button>
           </div>
         </div>
@@ -111,9 +101,7 @@ function NamesContent() {
   const searchParams = useSearchParams();
   const initialStatus = searchParams.get('status') || '';
 
-  const [names, setNames] = useState<Name[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [allNames, setAllNames] = useState<Name[]>([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState(initialStatus);
   const [categoryFilter, setCategoryFilter] = useState('');
@@ -122,30 +110,12 @@ function NamesContent() {
   const [page, setPage] = useState(1);
   const [editingId, setEditingId] = useState<number | null>(null);
 
-  const PAGE_SIZE = 50;
+  function reload() {
+    initStore();
+    setAllNames(getNames());
+  }
 
-  const fetchNames = useCallback(async () => {
-    setLoading(true);
-    const params = new URLSearchParams({
-      search,
-      status: statusFilter,
-      category: categoryFilter,
-      sortBy,
-      sortDir,
-      page: String(page),
-      pageSize: String(PAGE_SIZE),
-    });
-    try {
-      const res = await fetch(`/api/names?${params}`);
-      const data = await res.json();
-      setNames(data.names || []);
-      setTotal(data.total || 0);
-    } finally {
-      setLoading(false);
-    }
-  }, [search, statusFilter, categoryFilter, sortBy, sortDir, page]);
-
-  useEffect(() => { fetchNames(); }, [fetchNames]);
+  useEffect(() => { reload(); }, []);
 
   function handleSort(col: string) {
     if (sortBy === col) {
@@ -157,19 +127,38 @@ function NamesContent() {
     setPage(1);
   }
 
-  async function quickStatus(id: number, status: string) {
-    await fetch(`/api/names/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
-    });
-    fetchNames();
+  function quickStatus(id: number, status: string) {
+    updateName(id, { status });
+    setAllNames(getNames());
   }
 
-  function updateName(updated: Name) {
-    setNames((prev) => prev.map((n) => n.id === updated.id ? { ...updated, createdAt: String(updated.createdAt), updatedAt: String(updated.updatedAt) } : n));
+  function handleSave(updated: Name) {
+    setAllNames(getNames());
     setEditingId(null);
   }
+
+  // Filter
+  let filtered = allNames;
+  if (search) {
+    const q = search.toLowerCase();
+    filtered = filtered.filter((n) =>
+      n.name.toLowerCase().includes(q) || n.meaning.toLowerCase().includes(q)
+    );
+  }
+  if (statusFilter) filtered = filtered.filter((n) => n.status === statusFilter);
+  if (categoryFilter) filtered = filtered.filter((n) => n.category === categoryFilter);
+
+  // Sort
+  filtered = [...filtered].sort((a, b) => {
+    const aVal = a[sortBy as keyof Name] ?? '';
+    const bVal = b[sortBy as keyof Name] ?? '';
+    const cmp = String(aVal).localeCompare(String(bVal), undefined, { numeric: true });
+    return sortDir === 'asc' ? cmp : -cmp;
+  });
+
+  const total = filtered.length;
+  const totalPages = Math.ceil(total / PAGE_SIZE);
+  const pageNames = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   const SortIcon = ({ col }: { col: string }) => (
     <span className="ml-1 text-slate-300">
@@ -177,13 +166,11 @@ function NamesContent() {
     </span>
   );
 
-  const totalPages = Math.ceil(total / PAGE_SIZE);
-
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-8 py-8">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold text-slate-900">All Names</h1>
-        <p className="text-sm text-slate-500 mt-1">{total} names in database</p>
+        <p className="text-sm text-slate-500 mt-1">{total} name{total !== 1 ? 's' : ''}</p>
       </div>
 
       {/* Filters */}
@@ -222,13 +209,9 @@ function NamesContent() {
 
       {/* Table */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-        {loading ? (
-          <div className="flex items-center justify-center h-40">
-            <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-          </div>
-        ) : names.length === 0 ? (
+        {pageNames.length === 0 ? (
           <div className="text-center py-16 text-slate-400">
-            <p className="text-sm">No names found</p>
+            <p className="text-sm">{allNames.length === 0 ? 'No names yet — generate some first!' : 'No names match your filters'}</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -260,7 +243,7 @@ function NamesContent() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
-                {names.map((name) => (
+                {pageNames.map((name) => (
                   <>
                     <tr
                       key={name.id}
@@ -287,7 +270,7 @@ function NamesContent() {
                       </td>
                       <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                         <div className="flex gap-1">
-                          {['Like', 'Shortlist', 'Reject'].map((s) => (
+                          {(['Like', 'Shortlist', 'Reject'] as const).map((s) => (
                             <button
                               key={s}
                               onClick={() => quickStatus(name.id, s)}
@@ -309,7 +292,7 @@ function NamesContent() {
                         key={`edit-${name.id}`}
                         name={name}
                         onClose={() => setEditingId(null)}
-                        onSave={updateName}
+                        onSave={handleSave}
                       />
                     )}
                   </>

@@ -3,7 +3,8 @@
 import { useState } from 'react';
 import StatusBadge from '@/components/StatusBadge';
 import type { GeneratedName, NamingStyle } from '@/types';
-import { STYLE_LABELS, STYLE_DESCRIPTIONS, SEED_WORDS } from '@/lib/nameGenerator';
+import { STYLE_LABELS, STYLE_DESCRIPTIONS, SEED_WORDS, generateNames } from '@/lib/nameGenerator';
+import { initStore, createName } from '@/lib/store';
 
 const BATCH_SIZES = [30, 100, 500];
 const STYLES: NamingStyle[] = ['invented', 'trust', 'visibility', 'operations', 'modern', 'biblical'];
@@ -38,7 +39,7 @@ export default function GeneratePage() {
     setSelectedWords(selectedWords.length === SEED_WORDS.length ? [] : [...SEED_WORDS]);
   }
 
-  async function handleGenerate() {
+  function handleGenerate() {
     if (selectedWords.length === 0) {
       setError('Select at least one theme word');
       return;
@@ -49,42 +50,42 @@ export default function GeneratePage() {
     setSelected(new Set());
     setSavedCount(0);
 
-    try {
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ themeWords: selectedWords, style, count: batchSize }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setResults(data.names);
-      // Select all by default
-      setSelected(new Set(data.names.map((_: GeneratedName, i: number) => i)));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Generation failed');
-    } finally {
-      setLoading(false);
-    }
+    // Run generator (CPU-bound but fast enough for client)
+    setTimeout(() => {
+      try {
+        const names = generateNames(selectedWords, style, batchSize);
+        setResults(names);
+        setSelected(new Set(names.map((_: GeneratedName, i: number) => i)));
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Generation failed');
+      } finally {
+        setLoading(false);
+      }
+    }, 0);
   }
 
-  async function handleSave() {
+  function handleSave() {
     const toSave = results.filter((_, i) => selected.has(i));
     if (toSave.length === 0) return;
 
     setSaving(true);
+    initStore();
     let saved = 0;
 
     for (const name of toSave) {
-      try {
-        const res = await fetch('/api/names', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(name),
-        });
-        if (res.ok) saved++;
-      } catch {
-        // Skip duplicates silently
-      }
+      const created = createName({
+        name: name.name,
+        category: name.category,
+        meaning: name.meaning,
+        score: name.score,
+        domainIdea: name.domainIdea,
+        domainStatus: 'Unknown',
+        status: 'New',
+        notes: null,
+        riskNotes: name.riskNotes,
+        rank: null,
+      });
+      if (created) saved++;
     }
 
     setSavedCount(saved);

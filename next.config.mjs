@@ -1,8 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  experimental: {
-    serverComponentsExternalPackages: ['@libsql/client'],
-  },
+  output: 'export',
+  basePath: '/domainnames',
+  trailingSlash: true,
+  images: { unoptimized: true },
 };
 
 export default nextConfig;
