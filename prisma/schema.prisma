@@ -1,0 +1,31 @@
+generator client {
+  provider = "prisma-client-js"
+  engineType = "wasm"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Name {
+  id           Int      @id @default(autoincrement())
+  name         String   @unique
+  category     String
+  meaning      String
+  score        Float
+  domainIdea   String?
+  domainStatus String   @default("Unknown")
+  status       String   @default("New")
+  notes        String?
+  riskNotes    String?
+  rank         Int?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model SeedWord {
+  id        Int      @id @default(autoincrement())
+  word      String   @unique
+  createdAt DateTime @default(now())
+}
